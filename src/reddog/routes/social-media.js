@@ -209,11 +209,18 @@ module.exports = (socialMedia) => {
 
     /**
      * POST /api/social/facebook/ad
-     * Create a Facebook ad campaign
+     * Create a full Facebook ad campaign (campaign + ad set + creative + ad)
+     *
+     * Body:
+     *   userId, campaignName, adSetName, adName, targeting, creative, budget,
+     *   objective, optimizationGoal, billingEvent, status
      */
     router.post('/facebook/ad', requireConfirmation('facebook-ad'), async (req, res) => {
         const userId = req.body.userId || req.headers['x-user-id'];
-        const { campaignName, adSetName, adName, targeting, creative, budget } = req.body;
+        const {
+            campaignName, adSetName, adName, targeting, creative, budget,
+            objective, optimizationGoal, billingEvent, status
+        } = req.body;
 
         if (!userId) {
             return res.status(400).json({ error: 'User ID required' });
@@ -225,8 +232,32 @@ module.exports = (socialMedia) => {
 
         try {
             const result = await socialMedia.createFacebookAd(userId, {
-                campaignName, adSetName, adName, targeting, creative, budget
+                campaignName, adSetName, adName, targeting, creative, budget,
+                objective, optimizationGoal, billingEvent, status
             });
+            res.json(result);
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+
+    /**
+     * GET /api/social/facebook/ad/status?ad_id=xxx
+     * Get Facebook ad status by ad ID
+     */
+    router.get('/facebook/ad/status', async (req, res) => {
+        const userId = req.query.userId || req.headers['x-user-id'];
+        const { ad_id } = req.query;
+
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID required' });
+        }
+        if (!ad_id) {
+            return res.status(400).json({ error: 'ad_id query parameter required' });
+        }
+
+        try {
+            const result = await socialMedia.getFacebookAdStatus(userId, ad_id);
             res.json(result);
         } catch (error) {
             res.status(500).json({ error: error.message });

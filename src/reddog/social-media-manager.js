@@ -446,38 +446,179 @@ class SocialMediaManager {
 
     // ─── Facebook Ads ───
 
-    async createFacebookAd(userId, { campaignName, adSetName, adName, targeting, creative, budget }) {
-        const accessToken = await this.getAccessToken(userId, 'facebook');
+    /**
+     * Create a full Facebook ad campaign (campaign + ad set + creative + ad).
+     *
+     * @param userId   — Red Dog user ID for OAuth token lookup
+     * @param {Object} options
+     * @param {string} options.campaignName  — Campaign name
+     * @param {string} options.adSetName     — Ad set name
+     * @param {string} options.adName        — Ad name
+     * @param {Object} options.targeting     — Meta targeting spec
+     * @param {Object} options.creative      — { message, link, headline, description, image_url, video_id, call_to_action_type, page_id }
+     * @param {Object} options.budget        — { daily_budget, lifetime_budget } in AUD (dollars)
+     * @param {string} options.objective     — Campaign objective (default OUTCOME_TRAFFIC)
+     * @param {string} options.optimizationGoal — Ad set optimization goal (default LINK_CLICKS)
+     * @param {string} options.billingEvent  — Ad set billing event (default LINK_CLICKS)
+     * @param {string} options.status        — PAUSED or ACTIVE (default PAUSED)
+     * @returns {Object} { success, campaignId, adSetId, creativeId, adId }
+     */
+    async createFacebookAd(userId, {
+        campaignName, adSetName, adName, targeting, creative, budget,
+        objective, optimizationGoal, billingEvent, status
+    }) {
+        // Prefer the system user token (FACEBOOK_ADS_TOKEN) for ads, fall back to user OAuth token
+        const adsToken = process.env.FACEBOOK_ADS_TOKEN || process.env.FACEBOOK_MARKETING_API || await this.getAccessToken(userId, 'facebook');
         const config = this.platforms.facebook;
+        const apiBase = 'https://graph.facebook.com/v21.0';
 
         try {
-            // This is a simplified example - real implementation would be more complex
-            const adAccountId = process.env.FACEBOOK_AD_ACCOUNT_ID;
-            
-            if (!adAccountId) {
+            const adAccountIdRaw = process.env.FACEBOOK_AD_ACCOUNT_ID;
+            if (!adAccountIdRaw) {
                 throw new Error('FACEBOOK_AD_ACCOUNT_ID not configured');
             }
+            const adAccountId = adAccountIdRaw.startsWith('act_') ? adAccountIdRaw : `act_${adAccountIdRaw}`;
+            const pageId = creative?.page_id || process.env.FACEBOOK_PAGE_ID || '108727120';
+            const adStatus = status || 'PAUSED';
 
-            // Create campaign
+            // 1. Create campaign
+            console.log(`[SocialMedia] Creating Facebook campaign: ${campaignName}`);
             const campaignResponse = await axios.post(
-                `${config.apiUrl}/act_${adAccountId}/campaigns`,
+                `${apiBase}/${adAccountId}/campaigns`,
                 {
                     name: campaignName,
-                    objective: 'OUTCOME_ENGAGEMENT',
+                    objective: objective || 'OUTCOME_TRAFFIC',
                     status: 'PAUSED',
-                    access_token: accessToken
+                    buying_type: 'AUCTION',
+                    access_token: adsToken
                 }
             );
+            const campaignId = campaignResponse.data.id;
+            console.log(`[SocialMedia] Campaign created: ${campaignId}`);
 
-            console.log(`[SocialMedia] Created Facebook campaign: ${campaignResponse.data.id}`);
+            // 2. Create ad set
+            console.log(`[SocialMedia] Creating ad set: ${adSetName}`);
+            const adsetPayload = {
+                campaign_id: campaignId,
+                name: adSetName,
+                optimization_goal: optimizationGoal || 'LINK_CLICKS',
+                billing_event: billingEvent || 'LINK_CLICKS',
+                status: 'PAUSED',
+                access_token: adsToken,
+            };
+            if (budget?.daily_budget) adsetPayload.daily_budget = String(Math.round(budget.daily_budget * 100));
+            if (budget?.lifetime_budget) adsetPayload.lifetime_budget = String(Math.round(budget.lifetime_budget * 100));
+            if (targeting) adsetPayload.targeting = targeting;
+            adsetPayload.start_time = new Date(Date.now() + 60000).toISOString();
+
+            const adsetResponse = await axios.post(
+                `${apiBase}/${adAccountId}/adsets`,
+                adsetPayload
+            );
+            const adSetId = adsetResponse.data.id;
+            console.log(`[SocialMedia] Ad set created: ${adSetId}`);
+
+            // 3. Create ad creative
+            console.log(`[SocialMedia] Creating creative: ${adName}`);
+            const linkData = {
+                message: creative?.message || '',
+                call_to_action_type: creative?.call_to_action_type || 'LEARN_MORE',
+            };
+            if (creative?.link) linkData.link = creative.link;
+            if (creative?.headline) linkData.name = creative.headline;
+            if (creative?.description) linkData.description = creative.description;
+            if (creative?.image_url) {
+                if (creative.image_url.match(/^[a-f0-9]+$/i)) {
+                    linkData.image_hash = creative.image_url;
+                } else {
+                    linkData.picture = creative.image_url;
+                }
+            }
+
+            let objectStorySpec;
+            if (creative?.video_id) {
+                objectStorySpec = {
+                    page_id: pageId,
+                    video_data: {
+                        video_id: creative.video_id,
+                        message: creative?.message || '',
+                        title: creative?.headline || adName,
+                        description: creative?.description || '',
+                        call_to_action: {
+                            type: creative?.call_to_action_type || 'LEARN_MORE',
+                            value: { link: creative?.link || '' },
+                        },
+                    },
+                };
+            } else {
+                objectStorySpec = {
+                    page_id: pageId,
+                    link_data: linkData,
+                };
+            }
+
+            const creativeResponse = await axios.post(
+                `${apiBase}/${adAccountId}/adcreatives`,
+                {
+                    name: adName || `${campaignName} — Creative`,
+                    object_story_spec: objectStorySpec,
+                    access_token: adsToken,
+                }
+            );
+            const creativeId = creativeResponse.data.id;
+            console.log(`[SocialMedia] Creative created: ${creativeId}`);
+
+            // 4. Create ad
+            console.log(`[SocialMedia] Creating ad: ${adName}`);
+            const adResponse = await axios.post(
+                `${apiBase}/${adAccountId}/ads`,
+                {
+                    name: adName || `${campaignName} — Ad`,
+                    adset_id: adSetId,
+                    creative: { creative_id: creativeId },
+                    status: adStatus,
+                    access_token: adsToken,
+                }
+            );
+            const adId = adResponse.data.id;
+            console.log(`[SocialMedia] Ad created: ${adId}`);
+
             return {
                 success: true,
                 platform: 'facebook_ads',
-                campaignId: campaignResponse.data.id,
-                message: 'Facebook ad campaign created successfully!'
+                campaignId,
+                adSetId,
+                creativeId,
+                adId,
+                status: adStatus,
+                message: 'Facebook ad campaign created successfully!',
             };
         } catch (error) {
             console.error('[SocialMedia] Facebook ad creation failed:', error.message);
+            if (error.response) {
+                console.error('[SocialMedia] API response:', JSON.stringify(error.response.data));
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Get ad status by ad ID.
+     */
+    async getFacebookAdStatus(userId, adId) {
+        const adsToken = process.env.FACEBOOK_ADS_TOKEN || process.env.FACEBOOK_MARKETING_API || await this.getAccessToken(userId, 'facebook');
+        const apiBase = 'https://graph.facebook.com/v21.0';
+
+        try {
+            const resp = await axios.get(`${apiBase}/${adId}`, {
+                params: {
+                    fields: 'id,name,status,configured_status,effective_status,created_time,updated_time',
+                    access_token: adsToken,
+                },
+            });
+            return { success: true, data: resp.data };
+        } catch (error) {
+            console.error('[SocialMedia] Facebook ad status failed:', error.message);
             throw error;
         }
     }

@@ -53,6 +53,20 @@
           "description": "Crop health, growth stages, disease detection, and plant monitoring",
           "keywords": ["plant", "crop", "growth", "health", "disease", "pest", "yield", "vegetation", "ndvi"],
           "relatedTables": ["CropHealth", "GrowthStages", "DiseaseDetection", "YieldData", "PlantMonitoring"]
+        },
+        {
+          "id": "livestock",
+          "name": "Livestock",
+          "description": "Animal health, tracking, feeding, and livestock management",
+          "keywords": ["livestock", "animal", "cattle", "sheep", "stock", "herd", "grazing", "feeding", "animal health"],
+          "relatedTables": ["Livestock", "AnimalHealth", "HerdTracking", "FeedingRecords", "GrazingData"]
+        },
+        {
+          "id": "technology",
+          "name": "Technology",
+          "description": "Farm technology systems, automation, equipment, and digital infrastructure",
+          "keywords": ["technology", "automation", "equipment", "machinery", "digital", "infrastructure", "systems", "tech"],
+          "relatedTables": ["Equipment", "AutomationSystems", "TechnologyInventory", "DigitalInfrastructure"]
         }
       ]
     },
@@ -77,6 +91,50 @@
           "relatedTables": ["SocialMediaPosts", "Campaigns", "MarketingMetrics", "AdPerformance"]
         }
       ]
+    },
+    {
+      "id": "news-intelligence",
+      "name": "News Intelligence",
+      "description": "Curated news and market intelligence for agriculture and agtech",
+      "subtopics": [
+        {
+          "id": "agriculture-core",
+          "name": "Agriculture Core",
+          "description": "Cropping systems, livestock, water & irrigation, soil & carbon",
+          "keywords": ["cropping", "grain", "horticulture", "livestock", "beef", "dairy", "water", "irrigation", "soil", "carbon"],
+          "relatedTables": []
+        },
+        {
+          "id": "energy-infrastructure",
+          "name": "Energy & Infrastructure",
+          "description": "On-farm energy, fuel markets, grid policy affecting farms",
+          "keywords": ["energy", "solar", "battery", "microgrid", "diesel", "fuel", "grid", "policy", "infrastructure"],
+          "relatedTables": []
+        },
+        {
+          "id": "agtech-ai",
+          "name": "AgTech & AI",
+          "description": "Farm robotics, IoT telemetry, precision ag, AI models and automation",
+          "keywords": ["robotics", "iot", "sensor", "telemetry", "precision", "ai", "automation", "machine learning"],
+          "relatedTables": []
+        },
+        {
+          "id": "markets-policy",
+          "name": "Markets & Policy",
+          "description": "Commodity prices, trade/export, government policy, carbon markets, biodiversity credits",
+          "keywords": ["commodity", "price", "trade", "export", "policy", "government", "carbon", "biodiversity", "credits"],
+          "relatedTables": []
+        },
+        {
+          "id": "frontier-experimental",
+          "name": "Frontier / Experimental",
+          "description": "Synthetic biology, alternative crops, climate adaptation",
+          "keywords": ["synthetic biology", "alternative crops", "climate adaptation", "experimental", "innovation"],
+          "relatedTables": []
+        }
+      ],
+      "keywords": ["news", "intelligence", "briefing", "daily", "weekly", "monthly", "market", "trends"],
+      "relatedTables": []
     }
   ]
 }

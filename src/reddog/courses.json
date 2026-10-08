@@ -176,6 +176,82 @@
       ]
     },
     {
+      "id": "windsurf-github-agents",
+      "title": "Build Agents with Windsurf, Devin & GitHub",
+      "tagline": "From zero to deployed agent using AI coding tools",
+      "level": "intermediate",
+      "duration": "4 hours",
+      "price": 350,
+      "category": "platform",
+      "tags": ["windsurf", "devin", "github", "git", "agents", "moltbot", "development", "coding", "AI tools"],
+      "sourceFile": "AGENT_SPECIFICATION.md",
+      "supplementFiles": ["FIELD_AGENT_GATEWAY_INTEGRATION.md"],
+      "modules": [
+        { "id": "m1", "title": "Getting Started with Windsurf",              "section": "Windsurf" },
+        { "id": "m2", "title": "GitHub Basics — Clone, Commit, Push",        "section": "GitHub" },
+        { "id": "m3", "title": "Understanding the Moltbot Source Code",      "section": "Moltbot" },
+        { "id": "m4", "title": "Building Your Own Agent",                    "section": "Development" },
+        { "id": "m5", "title": "Deploying and Maintaining Your Agent",       "section": "Deployment" }
+      ]
+    },
+    {
+      "id": "agrieco-tourism",
+      "title": "Agrieco-Tourism Planning Developing and Installation",
+      "tagline": "Turn your farm into a destination",
+      "level": "intermediate",
+      "duration": "12 hours",
+      "price": 399,
+      "category": "online",
+      "tags": ["agrieco-tourism", "eco-stay", "farm tourism", "visitor experience", "sustainable income", "hospitality"],
+      "sourceFile": "DASHBOARD-USER-GUIDE.md",
+      "sourceSections": ["Eco-Stay", "FarmG8", "Market Place"],
+      "modules": [
+        { "id": "m1", "title": "What is agrieco-tourism?",                        "section": "Introduction" },
+        { "id": "m2", "title": "Planning your farm tourism concept",              "section": "Planning" },
+        { "id": "m3", "title": "Development — infrastructure and facilities",     "section": "Development" },
+        { "id": "m4", "title": "Visitor experience design",                       "section": "Experience" },
+        { "id": "m5", "title": "Marketing, bookings and pricing",                 "section": "Commercial" },
+        { "id": "m6", "title": "Compliance, insurance and sustainability",        "section": "Compliance" }
+      ]
+    },
+    {
+      "id": "permaculture-design",
+      "title": "Permaculture Principles and Design",
+      "tagline": "Design nature-based systems that work",
+      "level": "intermediate",
+      "duration": "10 hours",
+      "price": 349,
+      "category": "online",
+      "tags": ["permaculture", "design", "sustainability", "regenerative", "food forest", "zones"],
+      "sourceFile": "DASHBOARD-USER-GUIDE.md",
+      "modules": [
+        { "id": "m1", "title": "The 12 permaculture principles",                  "section": "Principles" },
+        { "id": "m2", "title": "Ethics and design framework",                     "section": "Ethics" },
+        { "id": "m3", "title": "Zone and sector analysis",                        "section": "Design" },
+        { "id": "m4", "title": "Water harvesting and earthworks",                 "section": "Water" },
+        { "id": "m5", "title": "Food forests and guild planting",                 "section": "Plants" }
+      ]
+    },
+    {
+      "id": "iot-precision-ag",
+      "title": "IoT & Precision Agriculture Technology",
+      "tagline": "Data-driven farming from paddock to cloud",
+      "level": "intermediate",
+      "duration": "10 weeks",
+      "price": 349,
+      "category": "online",
+      "tags": ["IoT", "LoRaWAN", "sensors", "drones", "DJI", "ArcGIS", "machine learning", "precision agriculture"],
+      "sourceFile": "MODULAR-API-INTEGRATION.md",
+      "supplementFiles": ["DASHBOARD-USER-GUIDE.md"],
+      "modules": [
+        { "id": "m1", "title": "IoT sensors and LoRaWAN networks",               "section": "IoT" },
+        { "id": "m2", "title": "DJI FlightHub 2 and drone autodocking",          "section": "Drones" },
+        { "id": "m3", "title": "ArcGIS mapping and spatial analysis",            "section": "Mapping" },
+        { "id": "m4", "title": "Machine learning for yield and disease",         "section": "ML" },
+        { "id": "m5", "title": "Autonomous vehicles on farm",                    "section": "Automation" }
+      ]
+    },
+    {
       "id": "farmg8-marketplace",
       "title": "FarmG8 — Market, Eco-Stay and Education",
       "tagline": "The farm's commercial and community hub",

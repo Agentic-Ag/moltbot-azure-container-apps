@@ -4,9 +4,10 @@ const fs = require('fs');
 const TopicManager = require('./topic-manager');
 const KnowledgeGraph = require('./knowledge-graph');
 const FarmContent = require('./farm-content');
+const KnowledgeBase = require('./knowledge-base');
 
 class AIEngine {
-    constructor(db, billing = null, blobStorage = null, serviceBus = null, approvalManager = null, deviceCommands = null, sensorCommands = null) {
+    constructor(db, billing = null, blobStorage = null, serviceBus = null, approvalManager = null, deviceCommands = null, sensorCommands = null, emailCommands = null, oneDriveCommands = null, documentGenerator = null, topicManager = null) {
         this.db = db;
         this.billing = billing;
         this.blobStorage = blobStorage;
@@ -14,7 +15,18 @@ class AIEngine {
         this.approvalManager = approvalManager;
         this.deviceCommands = deviceCommands;
         this.sensorCommands = sensorCommands;
+        this.emailCommands = emailCommands;
+        this.oneDriveCommands = oneDriveCommands;
+        this.documentGenerator = documentGenerator;
+        this.topicManager = topicManager || new TopicManager();
         this.schemaCache = null;
+        // ── LLM backend selection ───────────────────────────────────────────
+        // When OLLAMA_URL is set (Agent Edge / offline mode), use the local
+        // Ollama server instead of OpenRouter. This lets Red Dog run entirely
+        // offline on the NVIDIA Jetson/IGX without any cloud API keys.
+        this.ollamaUrl = process.env.OLLAMA_URL || '';            // e.g. http://ollama:11434
+        this.ollamaModel = process.env.OLLAMA_MODEL || 'llama3:8b';
+        this.useOllama = !!this.ollamaUrl;
         this.model = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
         this.fallbackModel = process.env.OPENROUTER_FALLBACK_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
         this.apiKey = process.env.OPENROUTER_API_KEY;
@@ -22,8 +34,8 @@ class AIEngine {
         this.maxHistory = parseInt(process.env.CONVERSATION_HISTORY_LENGTH) || 20;
         this.persona = this.loadPersona();
         this.dbContext = this.loadDatabaseContext();
-        this.topicManager = new TopicManager();
         this.knowledgeGraph = new KnowledgeGraph();
+        this.knowledgeBase = new KnowledgeBase(db);
         this.farmId = process.env.FARM_ID || 'grassgum'; // Default farm identifier
         this.persistentChatEnabled = process.env.PERSISTENT_CHAT_ENABLED !== 'false'; // Enabled by default
         this.farmContent = new FarmContent(db);
@@ -39,6 +51,16 @@ class AIEngine {
                 approvalManager: this.approvalManager,
                 blobStorage: this.blobStorage,
                 serviceBus: this.serviceBus
+            });
+        }
+
+        // Initialize document commands if document generator is available
+        if (this.documentGenerator) {
+            const DocumentCommands = require('./document-commands');
+            this.documentCommands = new DocumentCommands({
+                documentGenerator: this.documentGenerator,
+                topicManager: this.topicManager,
+                db: this.db
             });
         }
     }
@@ -292,6 +314,25 @@ Conditional control examples:
 - Battery 75-100% AND soil moisture < 60% → suggest irrigation pump
 - Battery < 30% AND high load → suggest load shedding
 - Rain forecast AND soil moisture > 80% → suggest closing valves
+
+When the user asks to generate a report, document, or presentation on farm topics, respond with:
+{"action": "generate_document", "topics": ["<topic1>", "<topic2>", ...], "formats": ["<format1>", "<format2>"], "type": "<document_type>"}
+
+Document generation fields:
+- topics: list of topics to include (energy, carbon, technology, climate, water, soil, plants, livestock, farming)
+- formats: document formats (word, powerpoint, excel) - defaults to word if not specified
+- type: document type (word, powerpoint, excel) - for single document requests
+
+Available topics: energy, carbon, technology, climate, water, soil, plants, livestock, farming
+Document formats: word (.docx), powerpoint (.pptx), excel (.xlsx)
+
+Example requests:
+- "Generate a report on energy and carbon" → {"action": "generate_document", "topics": ["energy", "carbon"], "formats": ["word", "excel"]}
+- "Create a PowerPoint presentation on water and soil" → {"action": "generate_document", "topics": ["water", "soil"], "type": "powerpoint"}
+- "Write a Word document about livestock and climate" → {"action": "generate_document", "topics": ["livestock", "climate"], "type": "word"}
+- "List topics" → {"action": "list_topics"}
+
+Documents will be saved to the Farms project folder in OneDrive (Smart Farm/Project/UF02 Grassgum Farm/Reports).
 `;
 
         // Inject available sensor providers dynamically from registry
@@ -371,7 +412,196 @@ Conditional control examples:
         return unsafeKeywords.some(keyword => lowerSql.includes(keyword));
     }
 
+    /**
+     * Generate a database query for a specific topic
+     */
+    generateTopicQuery(topic) {
+        const topicQueries = {
+            energy: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM EnergyMetrics ORDER BY Timestamp DESC"
+            },
+            carbon: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM CarbonMetrics ORDER BY Timestamp DESC"
+            },
+            technology: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM Equipment ORDER BY LastUpdated DESC"
+            },
+            climate: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM WeatherData ORDER BY Timestamp DESC"
+            },
+            water: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM WaterUsage ORDER BY Timestamp DESC"
+            },
+            soil: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM SoilTests ORDER BY TestDate DESC"
+            },
+            plants: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM CropHealth ORDER BY Timestamp DESC"
+            },
+            livestock: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM Livestock ORDER BY LastUpdated DESC"
+            },
+            farming: {
+                database: 'Grassgum Farm',
+                sql: "SELECT TOP 50 * FROM FarmOperations ORDER BY Date DESC"
+            }
+        };
+
+        return topicQueries[topic] || null;
+    }
+
+    /**
+     * Summarize topic data for documents
+     */
+    summarizeTopicData(results, topic) {
+        if (!results || results.length === 0) {
+            return `No data available for ${topic}.`;
+        }
+
+        const count = results.length;
+        const latest = results[0];
+        const oldest = results[results.length - 1];
+
+        return `Found ${count} records for ${topic}. Data ranges from ${oldest.Timestamp || oldest.Date || oldest.TestDate || oldest.LastUpdated || 'N/A'} to ${latest.Timestamp || latest.Date || latest.TestDate || latest.LastUpdated || 'N/A'}.`;
+    }
+
+    /**
+     * Extract key metrics from topic data
+     */
+    extractMetrics(results, topic) {
+        if (!results || results.length === 0) {
+            return {};
+        }
+
+        const metrics = {};
+        const latest = results[0];
+
+        // Extract common numeric fields
+        const numericFields = Object.keys(latest).filter(key => 
+            typeof latest[key] === 'number' && key !== 'id' && key !== 'ID'
+        );
+
+        numericFields.forEach(field => {
+            metrics[field] = latest[field];
+        });
+
+        return metrics;
+    }
+
+    /**
+     * Generate analysis for topic data
+     */
+    generateTopicAnalysis(results, topic) {
+        if (!results || results.length === 0) {
+            return 'No data available for analysis.';
+        }
+
+        const count = results.length;
+        const latest = results[0];
+
+        // Basic analysis based on topic
+        const analyses = {
+            energy: `Energy data shows ${count} readings. Latest consumption: ${latest.Consumption || latest.Value || 'N/A'} kWh.`,
+            carbon: `Carbon metrics recorded ${count} data points. Current sequestration: ${latest.Sequestration || latest.Value || 'N/A'} tons.`,
+            technology: `${count} equipment items tracked. Latest status: ${latest.Status || 'Active'}.`,
+            climate: `${count} weather records. Current temperature: ${latest.Temperature || latest.Temp || 'N/A'}°C.`,
+            water: `${count} water usage records. Latest usage: ${latest.Usage || latest.Value || 'N/A'} L.`,
+            soil: `${count} soil tests. Latest pH: ${latest.pH || latest.PH || 'N/A'}.`,
+            plants: `${count} crop health records. Current status: ${latest.Status || 'Healthy'}.`,
+            livestock: `${count} livestock records. Current count: ${latest.Count || latest.Quantity || 'N/A'}.`,
+            farming: `${count} farm operations. Latest activity: ${latest.Activity || latest.Operation || 'N/A'}.`
+        };
+
+        return analyses[topic] || `${count} records available for ${topic}.`;
+    }
+
+    /**
+     * Generate recommendations for a topic
+     */
+    generateTopicRecommendations(topic) {
+        const recommendations = {
+            energy: [
+                'Monitor peak usage times and consider load shifting',
+                'Evaluate solar panel efficiency and cleaning schedule',
+                'Review battery storage capacity and discharge patterns'
+            ],
+            carbon: [
+                'Continue carbon sequestration practices',
+                'Monitor emissions from energy consumption',
+                'Explore carbon credit opportunities'
+            ],
+            technology: [
+                'Schedule regular equipment maintenance',
+                'Evaluate automation opportunities',
+                'Monitor equipment performance metrics'
+            ],
+            climate: [
+                'Use weather forecasts for irrigation planning',
+                'Monitor extreme weather alerts',
+                'Adjust planting schedules based on climate data'
+            ],
+            water: [
+                'Implement water conservation measures',
+                'Monitor soil moisture levels for optimal irrigation',
+                'Review water usage patterns for efficiency'
+            ],
+            soil: [
+                'Conduct regular soil testing',
+                'Adjust nutrient applications based on test results',
+                'Monitor soil organic matter levels'
+            ],
+            plants: [
+                'Monitor crop health indicators regularly',
+                'Implement integrated pest management',
+                'Track growth stages for optimal timing'
+            ],
+            livestock: [
+                'Monitor animal health metrics',
+                'Optimize feeding schedules',
+                'Track grazing patterns and rotation'
+            ],
+            farming: [
+                'Review operational efficiency',
+                'Schedule regular maintenance activities',
+                'Monitor resource allocation'
+            ]
+        };
+
+        return recommendations[topic] || ['Continue monitoring and data collection'];
+    }
+
     async _callAI(messages, modelOverride = null) {
+        // ── Ollama (offline / Agent Edge) ─────────────────────────────────
+        if (this.useOllama) {
+            const model = modelOverride || this.ollamaModel;
+            try {
+                const response = await axios.post(
+                    `${this.ollamaUrl}/api/chat`,
+                    { model, messages, stream: false },
+                    { headers: { 'Content-Type': 'application/json' }, timeout: 120000 }
+                );
+                // Ollama returns { message: { content: "..." }, ... }
+                const content = response.data?.message?.content || response.data?.response || '';
+                return {
+                    data: { choices: [{ message: { content } }] },
+                    usedFallback: false,
+                    model,
+                };
+            } catch (err) {
+                console.error(`[AI] Ollama call failed: ${err.message}`);
+                throw err;
+            }
+        }
+
+        // ── OpenRouter (cloud) ─────────────────────────────────────────────
         const primary = modelOverride || this.model;
         try {
             const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
@@ -436,6 +666,24 @@ Conditional control examples:
                 }
             }
 
+            // Check for email commands
+            if (this.emailCommands) {
+                const emailCommand = this.emailCommands.parseCommand(userMessage);
+                if (emailCommand) {
+                    const result = await this.emailCommands.execute(emailCommand, userId);
+                    return { reply: result.message, ...result };
+                }
+            }
+
+            // Check for OneDrive commands
+            if (this.oneDriveCommands) {
+                const oneDriveCommand = this.oneDriveCommands.parseCommand(userMessage);
+                if (oneDriveCommand) {
+                    const result = await this.oneDriveCommands.execute(oneDriveCommand, userId);
+                    return { reply: result.message, ...result };
+                }
+            }
+
             // Detect topics in the message
             let detectedTopics = [];
             let topicContext = '';
@@ -447,8 +695,28 @@ Conditional control examples:
                 }
             }
 
+            // Search knowledge base if query matches knowledge base keywords
+            let knowledgeContext = '';
+            let knowledgeResults = [];
+            if (this.knowledgeBase && this.knowledgeBase.shouldSearch(userMessage)) {
+                console.log(`[AI] Searching knowledge base for: ${userMessage}`);
+                knowledgeResults = await this.knowledgeBase.search(userMessage, { limit: 5 });
+                
+                if (knowledgeResults.length > 0) {
+                    knowledgeContext = this.knowledgeBase.buildContext(userMessage);
+                    // Log the search for analytics
+                    await this.knowledgeBase.logSearch(
+                        userId,
+                        userMessage,
+                        knowledgeResults.length,
+                        knowledgeResults.map(r => r.articleId)
+                    );
+                    console.log(`[AI] Knowledge base search returned ${knowledgeResults.length} results`);
+                }
+            }
+
             const farmContext = await this._getFarmContext();
-            const systemPrompt = this.buildSystemPrompt() + (farmContext ? `\n${farmContext}` : '');
+            const systemPrompt = this.buildSystemPrompt() + (farmContext ? `\n${farmContext}` : '') + knowledgeContext;
             const history = await this.getHistory(userId);
 
             // Add topic context to user message if topics detected
@@ -558,7 +826,61 @@ Conditional control examples:
                 } catch (_) {}
             }
 
-            // Step 2g: Check if AI wants to run a query
+            // Step 2g: Check if AI wants to generate a document
+            if (this.documentCommands) {
+                const documentMatch = aiReply.match(/\{[\s\S]*?"action"\s*:\s*"generate_document"[\s\S]*?\}/);
+                if (documentMatch) {
+                    try {
+                        const documentAction = JSON.parse(documentMatch[0]);
+                        
+                        // If it's a list topics request
+                        if (documentAction.action === 'list_topics') {
+                            const result = await this.documentCommands.executeCommand(documentAction, {});
+                            await this.addToHistory(userId, 'user', userMessage);
+                            await this.addToHistory(userId, 'assistant', result.message);
+                            return { reply: result.message, documentAction };
+                        }
+                        
+                        // For document generation, we need to fetch data first
+                        // Query the database for each topic
+                        const data = {};
+                        for (const topic of documentAction.topics || []) {
+                            try {
+                                // Generate a query for this topic
+                                const topicQuery = this.generateTopicQuery(topic);
+                                if (topicQuery && this.db && this.db.isConnected) {
+                                    const results = await this.db.query(topicQuery.sql, [], topicQuery.database);
+                                    data[topic] = {
+                                        summary: this.summarizeTopicData(results, topic),
+                                        metrics: this.extractMetrics(results, topic),
+                                        data: results.slice(0, 20),
+                                        analysis: this.generateTopicAnalysis(results, topic),
+                                        recommendations: this.generateTopicRecommendations(topic)
+                                    };
+                                } else {
+                                    data[topic] = { summary: 'No database query available for this topic' };
+                                }
+                            } catch (error) {
+                                console.error(`[AI] Error fetching data for topic ${topic}:`, error.message);
+                                data[topic] = { summary: 'Error fetching data for this topic' };
+                            }
+                        }
+                        
+                        const result = await this.documentCommands.executeCommand(documentAction, data);
+                        await this.addToHistory(userId, 'user', userMessage);
+                        await this.addToHistory(userId, 'assistant', result.message);
+                        return { reply: result.message, documentAction, details: result.details };
+                    } catch (error) {
+                        console.error('[AI] Error executing document command:', error);
+                        const reply = `Sorry mate, I had trouble generating that document: ${error.message}`;
+                        await this.addToHistory(userId, 'user', userMessage);
+                        await this.addToHistory(userId, 'assistant', reply);
+                        return { reply, error: error.message };
+                    }
+                }
+            }
+
+            // Step 2h: Check if AI wants to run a query
             const queryMatch = aiReply.match(/\{[\s\S]*?"action"\s*:\s*"query"[\s\S]*?\}/);
             if (queryMatch && this.db && this.db.isConnected) {
                 try {

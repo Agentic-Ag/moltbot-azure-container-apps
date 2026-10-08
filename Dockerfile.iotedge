@@ -1,0 +1,86 @@
+# ─── Red Dog — Azure IoT Edge Module ────────────────────────────────────────
+# Multi-stage build that bundles the local @agentic-ag/service-bus-client
+# shared library before npm install, so the file: reference resolves correctly
+# inside the container.
+#
+# Build context root: Agentic Ag/Agents/Red Dog/Red Dog/
+# Run from the project root (two levels above this Dockerfile):
+#
+#   docker build \
+#     -f "Agents/Red Dog/Red Dog/Dockerfile.iotedge" \
+#     --build-arg TARGETPLATFORM=linux/arm64 \
+#     -t reddog-iotedge:latest \
+#     .
+#
+# Supported platforms:
+#   linux/amd64  — server / x86 gateway
+#   linux/arm64  — Raspberry Pi 4 / NVIDIA Jetson (farm gateway)
+#   linux/arm/v7 — Raspberry Pi 3
+
+ARG TARGETPLATFORM=linux/arm64
+
+# ── Stage 1: prepare shared library ──────────────────────────────────────────
+FROM node:22-alpine AS shared-lib
+WORKDIR /shared
+COPY Backend/Azure\ IoT\ Hub\ Service\ Bus/package.json ./
+COPY Backend/Azure\ IoT\ Hub\ Service\ Bus/agent-service-bus-client.js ./
+RUN npm install --omit=dev
+
+# ── Stage 2: Red Dog app ──────────────────────────────────────────────────────
+FROM node:22-alpine AS app
+
+WORKDIR /app
+
+# Bundle shared library so file: dependency resolves
+COPY --from=shared-lib /shared /app/vendor/service-bus-client
+
+# Rewrite package.json file: reference to the vendored copy
+COPY Agents/Red\ Dog/Red\ Dog/package.json ./package.json.orig
+RUN node -e "
+  const fs = require('fs');
+  const pkg = JSON.parse(fs.readFileSync('package.json.orig', 'utf8'));
+  pkg.dependencies['@agentic-ag/service-bus-client'] = 'file:./vendor/service-bus-client';
+  fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+"
+
+# Install production deps
+RUN npm ci --omit=dev
+
+# Copy Red Dog source
+COPY Agents/Red\ Dog/Red\ Dog/src ./src
+
+# ── Stage 3: production image ─────────────────────────────────────────────────
+FROM node:22-alpine
+
+WORKDIR /app
+
+# Copy compiled node_modules + source
+COPY --from=app /app/node_modules ./node_modules
+COPY --from=app /app/src          ./src
+COPY --from=app /app/package.json ./package.json
+COPY --from=app /app/vendor       ./vendor
+
+# Create non-root user
+RUN addgroup -g 1001 -S iotedge && \
+    adduser  -S reddog -u 1001 -G iotedge && \
+    chown -R reddog:iotedge /app
+
+USER reddog
+
+# IoT Edge module — exposes both the agent API (3001) and IoT Edge module port (18789)
+ENV API_PORT=3001
+ENV GATEWAY_PORT=18789
+EXPOSE 3001
+EXPOSE 18789
+
+# Health check — IoT Edge module client heartbeat endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD wget -q --spider http://localhost:${API_PORT}/health 2>/dev/null || exit 1
+
+# Labels for IoT Edge module registry
+LABEL org.opencontainers.image.title="Red Dog IoT Edge Module"
+LABEL org.opencontainers.image.description="Agentic Ag edge agent — sensor ingest, FL client, energy dispatch, Discord UI"
+LABEL org.opencontainers.image.vendor="Zerosum Agriculture"
+LABEL org.opencontainers.image.source="https://github.com/zerosumag/agentic-ag"
+
+CMD ["node", "src/reddog/index.js"]

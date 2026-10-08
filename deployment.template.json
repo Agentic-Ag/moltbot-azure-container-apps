@@ -1,0 +1,116 @@
+{
+  "$schema-template": "2.0.0",
+  "modulesContent": {
+    "$edgeAgent": {
+      "properties.desired": {
+        "schemaVersion": "1.1",
+        "runtime": {
+          "type": "docker",
+          "settings": {
+            "minDockerVersion": "v1.25",
+            "loggingOptions": "",
+            "registryCredentials": {
+              "agenticAgACR": {
+                "username": "$CONTAINER_REGISTRY_USERNAME",
+                "password": "$CONTAINER_REGISTRY_PASSWORD",
+                "address": "$CONTAINER_REGISTRY_ADDRESS"
+              }
+            }
+          }
+        },
+        "systemModules": {
+          "edgeAgent": {
+            "type": "docker",
+            "settings": {
+              "image": "mcr.microsoft.com/azureiotedge-agent:1.5",
+              "createOptions": {}
+            }
+          },
+          "edgeHub": {
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "mcr.microsoft.com/azureiotedge-hub:1.5",
+              "createOptions": {
+                "HostConfig": {
+                  "PortBindings": {
+                    "5671/tcp": [{ "HostPort": "5671" }],
+                    "8883/tcp": [{ "HostPort": "8883" }],
+                    "443/tcp":  [{ "HostPort": "443" }]
+                  }
+                }
+              }
+            },
+            "env": {},
+            "desiredStatus": "running",
+            "restartPolicy": "always"
+          }
+        },
+        "modules": {
+          "RedDog": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "${MODULES.RedDog}",
+              "createOptions": {
+                "HostConfig": {
+                  "PortBindings": {
+                    "3001/tcp":  [{ "HostPort": "3001" }],
+                    "18789/tcp": [{ "HostPort": "18789" }]
+                  },
+                  "Binds": [
+                    "/var/run/iotedge:/var/run/iotedge:ro"
+                  ]
+                }
+              }
+            },
+            "env": {
+              "FARM_ID":      { "value": "$FARM_ID" },
+              "FARM_NAME":    { "value": "$FARM_NAME" },
+              "API_PORT":     { "value": "3001" },
+              "GATEWAY_PORT": { "value": "18789" },
+
+              "FARM_SERVICE_BUS_CONNECTION_STRING": {
+                "value": "$FARM_SERVICE_BUS_CONNECTION_STRING"
+              },
+              "FARM_SERVICE_BUS_NAMESPACE": {
+                "value": "$FARM_SERVICE_BUS_NAMESPACE"
+              },
+              "COORDINATOR_SERVICE_BUS_CONNECTION_STRING": {
+                "value": "$COORDINATOR_SERVICE_BUS_CONNECTION_STRING"
+              }
+            }
+          }
+        }
+      }
+    },
+    "$edgeHub": {
+      "properties.desired": {
+        "schemaVersion": "1.2",
+        "routes": {
+          "RedDogToIoTHub":    "FROM /messages/modules/RedDog/outputs/* INTO $upstream",
+          "IoTHubToRedDog":    "FROM $upstream INTO BrokeredEndpoint(\"/modules/RedDog/inputs/input1\")"
+        },
+        "storeAndForwardConfiguration": {
+          "timeToLiveSecs": 7200
+        }
+      }
+    },
+    "RedDog": {
+      "properties.desired": {
+        "farm_id":            "$FARM_ID",
+        "farm_name":          "$FARM_NAME",
+        "telemetry_interval_ms": 60000,
+        "fl_min_participants": 2,
+        "fl_round_deadline_ms": 300000,
+        "fl_local_epochs":    3,
+        "fl_dp_noise_sigma":  0.01,
+        "energy_efficiency_target_kwh_per_ha": 2.5,
+        "dispatch_enabled":   true
+      }
+    }
+  }
+}

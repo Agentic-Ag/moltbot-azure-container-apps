@@ -2,7 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const BillingSystem = require('./billing-system');
 const CourseTeacher = require('./course-teacher');
+const CourseCreator = require('./course-creator');
 const SmartChecks = require('./smart-checks');
+const TopicManager = require('./topic-manager');
+const NewsIntelligence = require('./news-intelligence');
 const metaWebhooksRoute = require('./routes/meta-webhooks');
 const socialMediaRoute = require('./routes/social-media');
 const marketingRoute = require('./routes/marketing');
@@ -11,7 +14,7 @@ const createCryptoRoutes = require('./routes/crypto-payments');
 const FarmContent = require('./farm-content');
 
 class APIServer {
-    constructor(aiEngine, db, blobStorage, serviceBus, approvalManager, socialMedia, deviceCommands = null, sensorCommands = null) {
+    constructor(aiEngine, db, blobStorage, serviceBus, approvalManager, socialMedia, deviceCommands = null, sensorCommands = null, emailCommands = null, approvalCommands = null, oneDriveCommands = null, oauthManager = null) {
         this.aiEngine = aiEngine;
         this.db = db;
         this.blobStorage = blobStorage;
@@ -20,10 +23,17 @@ class APIServer {
         this.socialMedia = socialMedia;
         this.deviceCommands = deviceCommands;
         this.sensorCommands = sensorCommands;
+        this.emailCommands = emailCommands;
+        this.approvalCommands = approvalCommands;
+        this.oneDriveCommands = oneDriveCommands;
+        this.oauthManager = oauthManager;
         this.billing = new BillingSystem({ db });
         this.courseTeacher = new CourseTeacher({ apiKey: process.env.OPENROUTER_API_KEY, model: process.env.OPENROUTER_MODEL });
+        this.courseCreator = new CourseCreator({ aiEngine });
         this.smartChecks = new SmartChecks(sensorCommands);
         this.farmContent = new FarmContent(db);
+        this.topicManager = new TopicManager();
+        this.newsIntelligence = new NewsIntelligence(this.topicManager);
         this.app = express();
         this.port = process.env.API_PORT || process.env.GATEWAY_PORT || 3001;
         this.setupMiddleware();
@@ -46,11 +56,13 @@ class APIServer {
         //   /health          — uptime probes
         //   /api/webhooks/*  — Meta sends events without our token (verified by HMAC instead)
         //   /api/social/auth/* — OAuth redirect callbacks
+        //   /api/onedrive/*  — OneDrive OAuth endpoints
         //   /api/openapi     — spec is public
         const PUBLIC_PREFIXES = [
             '/health',
             '/api/webhooks/',
             '/api/social/auth/',
+            '/api/onedrive/',
             '/api/data-deletion',
             '/api/payments/crypto/webhook', // Binance Pay webhook
             '/api/openapi'
@@ -92,6 +104,197 @@ class APIServer {
 
         // ── Crypto Payment Routes ───────────────────────────────────────
         this.app.use('/api/payments/crypto', createCryptoRoutes(this.db, this.serviceBus));
+
+        // ── News Intelligence Routes ───────────────────────────────────────
+        this.app.get('/api/news/topics', (req, res) => {
+            try {
+                const topics = this.newsIntelligence.getAvailableTopics();
+                res.json({ success: true, topics });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/news/daily', async (req, res) => {
+            try {
+                const { topics, importance } = req.query;
+                const userTopics = topics ? topics.split(',') : [];
+                const brief = await this.newsIntelligence.generateDailyBrief(userTopics, importance);
+                res.json({ success: true, brief });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/news/weekly', async (req, res) => {
+            try {
+                const { topics, importance } = req.query;
+                const userTopics = topics ? topics.split(',') : [];
+                const digest = await this.newsIntelligence.generateWeeklyDigest(userTopics, importance);
+                res.json({ success: true, digest });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/news/monthly', async (req, res) => {
+            try {
+                const { topics, importance } = req.query;
+                const userTopics = topics ? topics.split(',') : [];
+                const snapshot = await this.newsIntelligence.generateMonthlySnapshot(userTopics, importance);
+                res.json({ success: true, snapshot });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        // ── OneDrive OAuth Routes ─────────────────────────────────────────
+        if (this.oauthManager) {
+            // Login endpoint - returns authorization URL
+            this.app.get('/api/onedrive/login', (req, res) => {
+                try {
+                    const authUrl = this.oauthManager.getAuthorizationUrl();
+                    res.json({
+                        success: true,
+                        authUrl,
+                        message: 'Visit this URL to login with your Microsoft account'
+                    });
+                } catch (err) {
+                    res.status(500).json({
+                        success: false,
+                        error: err.message
+                    });
+                }
+            });
+
+            // Callback endpoint - handles authorization code
+            this.app.get('/api/onedrive/callback', async (req, res) => {
+                try {
+                    const { code, state } = req.query;
+                    
+                    if (!code) {
+                        return res.status(400).json({
+                            success: false,
+                            error: 'No authorization code provided'
+                        });
+                    }
+                    
+                    // Exchange code for tokens
+                    const tokens = await this.oauthManager.exchangeCodeForToken(code, state);
+                    
+                    // Return success page
+                    res.send(`
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Red Dog - OneDrive Connected</title>
+                            <style>
+                                body {
+                                    font-family: Arial, sans-serif;
+                                    display: flex;
+                                    justify-content: center;
+                                    align-items: center;
+                                    height: 100vh;
+                                    margin: 0;
+                                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                }
+                                .container {
+                                    background: white;
+                                    padding: 40px;
+                                    border-radius: 10px;
+                                    box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+                                    text-align: center;
+                                }
+                                h1 { color: #333; }
+                                .success { color: #10b981; font-size: 24px; margin: 20px 0; }
+                                .info { color: #666; margin: 10px 0; }
+                                button {
+                                    background: #667eea;
+                                    color: white;
+                                    border: none;
+                                    padding: 12px 24px;
+                                    border-radius: 5px;
+                                    cursor: pointer;
+                                    font-size: 16px;
+                                    margin-top: 20px;
+                                }
+                                button:hover { background: #5568d3; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="container">
+                                <h1>🐕 Red Dog</h1>
+                                <div class="success">✅ OneDrive Connected!</div>
+                                <p class="info">Your Microsoft account is now linked to Red Dog.</p>
+                                <p class="info">You can close this window and return to Red Dog.</p>
+                                <button onclick="window.close()">Close Window</button>
+                            </div>
+                        </body>
+                        </html>
+                    `);
+                } catch (err) {
+                    res.status(500).send(`
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Red Dog - Connection Failed</title>
+                            <style>
+                                body {
+                                    font-family: Arial, sans-serif;
+                                    display: flex;
+                                    justify-content: center;
+                                    align-items: center;
+                                    height: 100vh;
+                                    margin: 0;
+                                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                }
+                                .container {
+                                    background: white;
+                                    padding: 40px;
+                                    border-radius: 10px;
+                                    box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+                                    text-align: center;
+                                }
+                                h1 { color: #333; }
+                                .error { color: #ef4444; font-size: 24px; margin: 20px 0; }
+                                .info { color: #666; margin: 10px 0; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="container">
+                                <h1>🐕 Red Dog</h1>
+                                <div class="error">❌ Connection Failed</div>
+                                <p class="info">${err.message}</p>
+                                <p class="info">Please try again or contact support.</p>
+                            </div>
+                        </body>
+                        </html>
+                    `);
+                }
+            });
+
+            // Auth status endpoint
+            this.app.get('/api/onedrive/status', (req, res) => {
+                const status = this.oauthManager.getStatus();
+                res.json(status);
+            });
+
+            // Logout endpoint
+            this.app.post('/api/onedrive/logout', async (req, res) => {
+                try {
+                    await this.oauthManager.clearTokens();
+                    res.json({
+                        success: true,
+                        message: 'Logged out successfully'
+                    });
+                } catch (err) {
+                    res.status(500).json({
+                        success: false,
+                        error: err.message
+                    });
+                }
+            });
+        }
 
         // Health check
         this.app.get('/health', async (req, res) => {
@@ -406,6 +609,44 @@ class APIServer {
                 const result = await this.courseTeacher.getTeacherPrompts(req.params.courseId, req.query.background || 'farmer', parseInt(req.query.count) || 5);
                 res.json(result);
             } catch (e) { res.status(500).json({ error: e.message }); }
+        });
+
+        // ── Course Creator Endpoints (ZSA10 — lessons from farm decisions) ──
+        // Teachable moments → LLM draft → farmer reviews → publish to the
+        // micro-learning registry via the dashboard's registry writer.
+
+        this.app.post('/api/reddog/course-creator/teachable-moments', async (req, res) => {
+            try {
+                if (!this.courseCreator.enabled) return res.status(503).json({ error: 'Course Creator disabled (COURSE_CREATOR_ENABLED=false)' });
+                const result = await this.courseCreator.listTeachableMoments(req.body || {});
+                res.json(result);
+            } catch (e) { res.status(500).json({ error: e.message }); }
+        });
+
+        this.app.post('/api/reddog/course-creator/draft-lesson', async (req, res) => {
+            try {
+                if (!this.courseCreator.enabled) return res.status(503).json({ error: 'Course Creator disabled' });
+                const result = await this.courseCreator.draftLesson(req.body || {});
+                res.json(result);
+            } catch (e) { res.status(400).json({ error: e.message }); }
+        });
+
+        this.app.post('/api/reddog/course-creator/publish', async (req, res) => {
+            try {
+                if (!this.courseCreator.enabled) return res.status(503).json({ error: 'Course Creator disabled' });
+                const result = await this.courseCreator.publishLesson(req.body || {});
+                res.status(result.published ? 200 : 422).json(result);
+            } catch (e) { res.status(500).json({ error: e.message }); }
+        });
+
+        this.app.get('/api/reddog/course-creator/engagement/:lessonId', (req, res) => {
+            res.json(this.courseCreator.getEngagement(req.params.lessonId));
+        });
+
+        this.app.post('/api/reddog/course-creator/engagement/:lessonId', (req, res) => {
+            const { event, ...meta } = req.body || {};
+            if (!event) return res.status(400).json({ error: 'event required (view|complete|feedback|applied)' });
+            res.json(this.courseCreator.trackEngagement(req.params.lessonId, event, meta));
         });
 
         // Chat endpoint — send a message, get an AI response (with optional DB queries)
